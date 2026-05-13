@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="fi">
+<head>
+    <meta charset="UTF-8">
+    <title>ProKassa - Financial Edition</title>
+    <style>
+        :root {
+            --vr-green: #3dbd31; --blue: #0054a6; --dark: #1a1a1a; --red: #d32f2f;
+        }
+        * { box-sizing: border-box; font-family: 'Segoe UI', sans-serif; }
+        body { display: grid; grid-template-columns: 400px 1fr; height: 100vh; margin: 0; background: #eee; }
+
+        /* VASEN: KUITTI */
+        #receipt-side { background: white; border-right: 4px solid var(--blue); display: flex; flex-direction: column; }
+        .receipt-scroll { flex-grow: 1; padding: 20px; font-family: 'Courier New', monospace; overflow-y: auto; }
+        .money-box { padding: 20px; background: var(--dark); color: white; }
+        .money-row { display: flex; justify-content: space-between; font-size: 1.2rem; margin-bottom: 5px; }
+        .grand-total { font-size: 2.5rem; color: var(--vr-green); border-top: 1px solid #444; padding-top: 10px; }
+
+        /* OIKEA: TOIMINNOT */
+        #action-side { padding: 20px; display: flex; flex-direction: column; gap: 20px; }
+        .btn-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+        .action-btn { height: 80px; border: none; border-radius: 8px; font-weight: bold; cursor: pointer; background: white; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
+        
+        /* MAKSUPÄÄTE SIMULAATIO */
+        #terminal-overlay { 
+            display: none; position: fixed; top:0; left:0; width:100%; height:100%; 
+            background: rgba(0,0,0,0.9); z-index: 2000; justify-content: center; align-items: center; 
+        }
+        .terminal { 
+            background: #333; width: 300px; padding: 20px; border-radius: 15px; color: #0f0; 
+            font-family: 'Courier New', monospace; text-align: center; border: 5px solid #555;
+        }
+        .terminal-screen { background: #020; padding: 20px; height: 150px; border-radius: 5px; margin-bottom: 20px; display: flex; flex-direction: column; justify-content: center; }
+
+        /* RAPORTTI-IKKUNA */
+        #report-modal { 
+            display: none; position: fixed; top:0; left:0; width:100%; height:100%; 
+            background: rgba(255,255,255,0.95); z-index: 3000; padding: 50px; overflow-y: auto;
+        }
+    </style>
+</head>
+<body>
+
+<section id="receipt-side">
+    <div style="background:var(--blue); color:white; padding:15px; text-align:center; font-weight:bold;">KASSA 1 - MYYNTI</div>
+    <div id="receipt-list" class="receipt-scroll"></div>
+    <div class="money-box">
+        <div class="money-row"><span>Summa:</span> <span id="raw-total">0.00</span>€</div>
+        <div class="money-row" id="rounding-row" style="color:#aaa; font-size:0.9rem;"><span>Pyöristys:</span> <span id="rounding">0.00</span>€</div>
+        <div class="money-row grand-total"><span>YHTEENSÄ:</span> <span id="final-total">0.00</span>€</div>
+    </div>
+</section>
+
+<section id="action-side">
+    <div class="btn-grid">
+        <button class="action-btn" onclick="addItem('KAHVI', 2.50)">☕ KAHVI 2.50€</button>
+        <button class="action-btn" onclick="addItem('HODARI', 4.49)">🌭 HODARI 4.49€</button>
+        <button class="action-btn" onclick="addItem('VR LIPPU', 15.12)">🚆 VR 15.12€</button>
+    </div>
+
+    <div style="margin-top:auto; display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+        <button class="action-btn" style="background:var(--vr-green); color:white;" onclick="pay('CASH')">KÄTEINEN (F12)</button>
+        <button class="action-btn" style="background:var(--blue); color:white;" onclick="pay('CARD')">KORTTI (F10)</button>
+        <button class="action-btn" onclick="showReport('X')">X-RAPORTTI</button>
+        <button class="action-btn" style="color:var(--red)" onclick="showReport('Z')">Z-RAPORTTI (PÄIVÄN PÄÄTÖS)</button>
+    </div>
+</section>
+
+<!-- MAKSUPÄÄTE -->
+<div id="terminal-overlay">
+    <div class="terminal">
+        <div class="terminal-screen" id="term-display">
+            VALMIS...
+        </div>
+        <div style="font-size:0.7rem; color:#888;">VERIFONE / NETS SIMULATION</div>
+    </div>
+</div>
+
+<!-- RAPORTTI -->
+<div id="report-modal">
+    <button onclick="document.getElementById('report-modal').style.display='none'" style="float:right">SULJE</button>
+    <div id="report-content" style="max-width:400px; margin:auto; font-family:monospace; white-space:pre-wrap; background:white; padding:20px; box-shadow:0 0 10px #ccc;"></div>
+</div>
+
+<script>
+    let cart = [];
+    let salesHistory = { cash: 0, card: 0, itemsCount: 0, vats: 0 };
+
+    function addItem(name, price) {
+        cart.push({name, price});
+        updateReceipt();
+    }
+
+    function updateReceipt(method = 'CARD') {
+        const list = document.getElementById('receipt-list');
+        list.innerHTML = '';
+        let total = 0;
+        cart.forEach(item => {
+            list.innerHTML += `<div style="display:flex; justify-content:space-between"><span>${item.name}</span><span>${item.price.toFixed(2)}</span></div>`;
+            total += item.price;
+        });
+
+        document.getElementById('raw-total').innerText = total.toFixed(2);
+        
+        // KÄTEISPYÖRISTYS LOGIIKKA (Lähin 0.05)
+        let final = total;
+        if (method === 'CASH') {
+            final = Math.round(total * 20) / 20;
+            document.getElementById('rounding-row').style.opacity = "1";
+            document.getElementById('rounding').innerText = (final - total).toFixed(2);
+        } else {
+            document.getElementById('rounding-row').style.opacity = "0";
+        }
+        
+        document.getElementById('final-total').innerText = final.toFixed(2);
+    }
+
+    async function pay(method) {
+        if (cart.length === 0) return;
+        let amount = parseFloat(document.getElementById('final-total').innerText);
+
+        if (method === 'CARD') {
+            await simulateTerminal(amount);
+            salesHistory.card += amount;
+        } else {
+            updateReceipt('CASH');
+            amount = parseFloat(document.getElementById('final-total').innerText);
+            alert("KÄTEISMAKSU: " + amount.toFixed(2) + "€\nAvaa kassalipas...");
+            salesHistory.cash += amount;
+        }
+
+        salesHistory.itemsCount += cart.length;
+        cart = [];
+        updateReceipt();
+    }
+
+    function simulateTerminal(amount) {
+        return new Promise(resolve => {
+            const overlay = document.getElementById('terminal-overlay');
+            const screen = document.getElementById('term-display');
+            overlay.style.display = 'flex';
+            
+            screen.innerText = "YHTEYS...";
+            setTimeout(() => { screen.innerText = "SUMMA: " + amount.toFixed(2) + "€\nLUE KORTTI"; }, 1000);
+            setTimeout(() => { screen.innerText = "KÄSITELLÄÄN..."; }, 2500);
+            setTimeout(() => { 
+                screen.innerText = "HYVÄKSYTTY\nKIITOS!"; 
+                setTimeout(() => {
+                    overlay.style.display = 'none';
+                    resolve();
+                }, 1000);
+            }, 4000);
+        });
+    }
+
+    function showReport(type) {
+        const now = new Date().toLocaleString('fi-FI');
+        let total = salesHistory.cash + salesHistory.card;
+        let content = `
+*** ${type}-RAPORTTI ***
+Aika: ${now}
+Kassa: 001 / Myyjä: AI
+-----------------------
+KÄTEINEN:    ${salesHistory.cash.toFixed(2)}€
+KORTTI:      ${salesHistory.card.toFixed(2)}€
+-----------------------
+YHTEENSÄ:    ${total.toFixed(2)}€
+Tuotteita:   ${salesHistory.itemsCount} kpl
+-----------------------
+ALV 24%:     ${(total * 0.1935).toFixed(2)}€
+ALV 14%:     ${(total * 0.1228).toFixed(2)}€
+-----------------------
+`;
+        if (type === 'Z') {
+            content += "\nPÄIVÄ SULJETTU.\nKassa nollattu.";
+            salesHistory = { cash: 0, card: 0, itemsCount: 0, vats: 0 };
+        }
+
+        document.getElementById('report-content').innerText = content;
+        document.getElementById('report-modal').style.display = 'block';
+    }
+</script>
+</body>
+</html>
